@@ -99,7 +99,7 @@ This project uses Poetry for dependency management and packaging. Follow these s
 
 2. Clone the repository and navigate to the project directory:
    ```
-   git clone <repository-url>
+   git clone https://github.com/lemberck-guilda/llm-routing.git
    cd llm-routing
    ```
 
@@ -113,11 +113,11 @@ This project uses Poetry for dependency management and packaging. Follow these s
    poetry shell
    ```
 
-5. Run the scripts, e.g.:
+5. Run the main script:
    ```
    python src/openrouter-langchain-agents/main.py
    ```
 
-7. To exit the program, type 'exit' when prompted for a query.
+6. To exit the program, type 'exit' when prompted for a query.
 
 Note: Ensure you have set up the necessary API keys for the language models used in the project. These should be stored in a `.env` file in the project root directory.
