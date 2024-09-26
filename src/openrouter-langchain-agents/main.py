@@ -53,16 +53,18 @@ Type 'exit' to end the session.
 ## REDO THE COMMENT BLOCK AND ADD PROPER STATEFUL PARTS ON AGENTS
 
 import os
-from typing import List, Dict, Any, Optional
+from typing import TypedDict, Dict, Any, Optional, Annotated
 from dotenv import load_dotenv
 from langchain_community.chat_models import ChatOpenAI ## Must be the comminuty one. _openai throws error
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from pydantic import BaseModel
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.memory import MemorySaver 
 from termcolor import colored
 import uuid
+from langchain_core.messages import HumanMessage
+
 
 load_dotenv()
 
@@ -92,16 +94,19 @@ llm_architecture = ChatOpenRouter(model_name="openai/gpt-4o", temperature=0)
 llm_general = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0)
 
 # Define the state pydantic model for agents system
-class AgentState(BaseModel):
-    query: str
+# class AgentState(TypedDict):
+#     department: str = ""
+#     messages: Annotated[list[AnyMessage], add_messages]
+
+from langgraph.graph import MessagesState # pre-built 'messages' key, equivalent to the above
+class AgentState(MessagesState):
     department: str = ""
-    response: str = ""
 
 
 ## Department Router Agent
 ### create agent and chain
-def route_query(state: AgentState) -> Dict[str, str]:
-    print(colored(f"\nRouting Agent: Processing query - '{state.query}'", "blue"))
+def route_query(state: Dict[str, Any]):
+    print(colored(f"\nRouting Agent: Processing query - '{state['messages'][-1]}'", "blue"))
     router_prompt = ChatPromptTemplate.from_template(
         "Route the following query to the appropriate department: {query}\n"
         "Departments: IT, Architecture, General\n"
@@ -111,47 +116,47 @@ def route_query(state: AgentState) -> Dict[str, str]:
         "Output ONLY ONE of these department names."
     )
     chain = router_prompt | llm_router | StrOutputParser()
-    department = chain.invoke({"query": state.query})
+    department = chain.invoke({"query": state['messages'][-1]})
     print(colored(f"Routing Agent: Query routed to {department}", "green"))
     return {"department": department}
 
 ## IT Department Agent
 ### create agent and chain  
-def handle_it_query(state: AgentState) -> AgentState:
-    print(colored(f"\nIT Department: Handling query - '{state.query}'", "blue"))
+def handle_it_query(state: Dict[str, Any]):
+    print(colored(f"\nIT Department: Handling query - '{state['messages'][-1]}'", "blue"))
     prompt = ChatPromptTemplate.from_template(
         "You are an expert in software development and coding. Answer the following query related to coding or technical issues: {query}"
     )
     chain = prompt | llm_it | StrOutputParser()
-    response = chain.invoke({"query": state.query})
+    response = chain.invoke({"query": state['messages'][-1]})
     print(colored("IT Department: Response generated", "green"))
-    return {"response": response}
+    return {"messages": response}
 
 ## Architecture Department Agent
 ### create agent and chain
-def handle_architecture_query(state: AgentState) -> Dict[str, str]:
-    print(colored(f"\nArchitecture Department: Handling query - '{state.query}'", "blue"))
+def handle_architecture_query(state: AgentState):
+    print(colored(f"\nArchitecture Department: Handling query - '{state['messages'][-1]}'", "blue"))
     prompt = ChatPromptTemplate.from_template(
         "You are a software architecture specialist. Answer the following query related to software architecture decisions or best practices: {query}"
     )
     chain = prompt | llm_architecture | StrOutputParser()
-    response = chain.invoke({"query": state.query})
+    response = chain.invoke({"query": state['messages'][-1]})
     print(colored("Architecture Department: Response generated", "green"))
-    return {"response": response}
+    return {"messages": response}
 
 ## General Department Agent
 ### create agent and chain
-def handle_general_query(state: AgentState) -> AgentState:
-    print(colored(f"\nGeneral Department: Handling query - '{state.query}'", "blue"))
+def handle_general_query(state: AgentState):
+    print(colored(f"\nGeneral Department: Handling query - '{state['messages'][-1]}'", "blue"))
     prompt = ChatPromptTemplate.from_template(
         "You are a helpful customer service assistant for a software engineering company. "
         "Answer the following general query: {query}"
         #"If the query is not related to software engineering or to information about the conversation and user, say 'I'm sorry, I can't help with that.'"
     )
     chain = prompt | llm_general | StrOutputParser()
-    response = chain.invoke({"query": state.query})
+    response = chain.invoke({"query": state['messages'][-1]})
     print(colored("General Department: Response generated", "green"))
-    return {"response": response}
+    return {"messages": response}
 
 
 # Define the LangGraph workflow
@@ -169,7 +174,7 @@ workflow.set_entry_point("route")
 # Add conditional edges
 workflow.add_conditional_edges(
     "route",
-    lambda x: x.department,  # Access department as an attribute of AgentState
+    lambda x: x['department'],  # Access department as an attribute of AgentState
     {
         "IT": "IT",
         "Architecture": "Architecture",
@@ -182,13 +187,13 @@ workflow.add_edge("IT", END)
 workflow.add_edge("Architecture", END)
 workflow.add_edge("General", END)
 
-# Compile the graph
-app = workflow.compile(checkpointer=memory)
+
+# Compile the graph with the checkpointer
+graph = workflow.compile(checkpointer=memory)
 
 def main():
     print("Welcome to Customer Support!")
     
-    # Generate a unique thread ID for the entire session
     session_id = str(uuid.uuid4())
     print(f"Session ID: {session_id}")
 
@@ -196,21 +201,23 @@ def main():
         query = input("How can I assist you today? (Type 'exit' to end): ")
         if query.lower() == 'exit':
             break
+
+        # Use the session_id as the thread_id
+        config = {"configurable": {"thread_id": session_id}}
         
-        initial_state = AgentState(query=query)
-        for output in app.stream(
-            initial_state,
-            config={"configurable": {"thread_id": session_id}},
-        ):
-            print(f"Debug - Raw output: {output}")  # Debug print
-            if isinstance(output, dict):
-                for key, value in output.items():
-                    if key in ["IT", "Architecture", "General"]:
-                        if isinstance(value, dict) and "response" in value:
-                            response = value["response"]
-                            print(f"\nCustomer Support Assistant: {response}")
-            else:
-                print(f"Debug - Unexpected output type: {type(output)}")
+        result = graph.invoke(
+            {
+                "messages": [HumanMessage(content=query)],
+                "department": "",
+            },
+            config=config
+        )
+        
+        if isinstance(result, dict) and "response" in result:
+            print(f"\nCustomer Support Assistant: {result['response']}")
+        else:
+            print(f"\nDebug - Unexpected result: {result}")
+        print(f"Session ID: {session_id}")
         print()
 
     print("\nThank you for using Customer Support. Have a great day!")
