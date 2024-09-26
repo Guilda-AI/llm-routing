@@ -1,5 +1,5 @@
 """
-Multi-Agent Customer Support System with LLM Routing
+Multi-Agent Customer Support System with LLM Routing and Stateful Conversations
 
 This script implements a multi-agent system for handling customer support queries
 related to software engineering. It uses LangChain and LangGraph to create a
@@ -7,7 +7,8 @@ workflow that routes and processes queries through different specialized agents.
 
 Key components:
 1. ChatOpenRouter: A custom ChatOpenAI class for using OpenRouter API with LangChain.
-2. AgentState: A Pydantic model representing the state of a query in the system.
+2. AgentState: A Pydantic model representing the state of a query in the system,
+   including the conversation history.
 3. Specialized agents:
    - Routing Agent: Determines which department should handle the query.
    - IT Department Agent: Handles coding and technical queries.
@@ -24,8 +25,6 @@ The system implements LLM routing to optimize query handling:
   * GPT-4o: Utilized for architecture questions, benefiting from its advanced reasoning.
 - The routing logic ensures that each query is processed by the most suitable model,
   balancing performance and cost-effectiveness.
-- This approach allows for flexibility in model selection and easy updates as new
-  models become available or as performance characteristics change.
 
 Workflow:
 1. User inputs a query.
@@ -37,10 +36,11 @@ Workflow:
 4. The department agent generates a response.
 5. The response is returned to the user.
 
-Stateful Conversation:
+Stateful Conversation: [NOT WORKING YET]
 - The system maintains a session ID for each conversation.
 - MemorySaver is used to checkpoint the conversation state.
-- This allows for potential future enhancements like context retention across queries.
+- AgentState includes a 'messages' field to store the conversation history.
+- Each agent function receives and updates the state, allowing for context retention.
 
 Environment variables:
 - OPENROUTER_API_KEY: API key for OpenRouter (must be set in .env file)
@@ -168,7 +168,7 @@ workflow.add_node("IT", handle_it_query)
 workflow.add_node("Architecture", handle_architecture_query)
 workflow.add_node("General", handle_general_query)
 
-# Set the conditional entry point
+# Set the entry point
 workflow.set_entry_point("route")
 
 # Add conditional edges
@@ -198,7 +198,7 @@ def main():
     print(f"Session ID: {session_id}")
 
     while True:
-        query = input("How can I assist you today? (Type 'exit' to end): ")
+        query = input("How can I assist you today? (Type 'exit' to end): "
         if query.lower() == 'exit':
             break
 
