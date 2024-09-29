@@ -55,10 +55,9 @@ Type 'exit' to end the session.
 import os
 from typing import TypedDict, Dict, Any, Optional, Annotated
 from dotenv import load_dotenv
-from langchain_community.chat_models import ChatOpenAI ## Must be the comminuty one. _openai throws error
+from langchain_community.chat_models import ChatOpenAI ## Must be the community one, the _openai throws error
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from pydantic import BaseModel
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver 
 from termcolor import colored
@@ -68,6 +67,7 @@ from langgraph.graph import MessagesState # pre-built 'messages' key with add_me
 
 load_dotenv()
 
+#### Custom ChatOpenRouter class to use OpenRouter API with LangChain
 class ChatOpenRouter(ChatOpenAI):
     openai_api_base: str
     openai_api_key: str
@@ -102,7 +102,7 @@ class AgentState(MessagesState):
 
 ## Department Router Agent
 ### create agent and chain
-def route_query(state: Dict[str, Any]):
+def route_query(state: AgentState):
     print(colored(f"\nRouting Agent: Processing query - '{state['messages'][-1]}'", "blue"))
     router_prompt = ChatPromptTemplate.from_template(
         "Route the following query to the appropriate department: {query}\n"
@@ -119,7 +119,7 @@ def route_query(state: Dict[str, Any]):
 
 ## IT Department Agent
 ### create agent and chain  
-def handle_it_query(state: Dict[str, Any]):
+def handle_it_query(state: AgentState):
     print(colored(f"\nIT Department: Handling query - '{state['messages'][-1]}'", "blue"))
     prompt = ChatPromptTemplate.from_template(
         "You are an expert in software development and coding. Answer the following query related to coding or technical issues: {query}"
@@ -190,17 +190,25 @@ memory = MemorySaver()
 # Compile the graph with the checkpointer
 graph = workflow.compile(checkpointer=memory)
 
-# Create the 'img' directory if it doesn't exist
-os.makedirs('llm-routing/src/openrouter-langchain-agents/img', exist_ok=True)
+# Define the path for the  graph image file
+img_path = 'llm-routing/src/openrouter-langchain-agents/img'
+img_file = os.path.join(img_path, 'workflow_graph.png')
 
-# Generate the Mermaid PNG and save it
-mermaid_png = graph.get_graph().draw_mermaid_png()
+# Check if the image file already exists
+if not os.path.exists(img_file):
+    # Create the 'img' directory if it doesn't exist
+    os.makedirs(img_path, exist_ok=True)
 
-# Save the PNG to a file
-with open('llm-routing/src/openrouter-langchain-agents/img/workflow_graph.png', 'wb') as f:
-    f.write(mermaid_png)
+    # Generate the Mermaid PNG and save it
+    mermaid_png = graph.get_graph().draw_mermaid_png()
 
-print("Graph image saved as 'llm-routing/src/openrouter-langchain-agents/img/workflow_graph.png'")
+    # Save the PNG to a file
+    with open(img_file, 'wb') as f:
+        f.write(mermaid_png)
+
+    print(f"Graph image saved as '{img_file}'")
+else:
+    print(f"Graph image already exists at '{img_file}'")
 
 def main():
     print("Welcome to Customer Support!")
