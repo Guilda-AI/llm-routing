@@ -87,9 +87,9 @@ class ChatOpenRouter(ChatOpenAI):
 
 # Initialize OpenRouter clients
 llm_router = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0)
-llm_it = ChatOpenRouter(model_name="anthropic/claude-3.5-sonnet", temperature=0)
-llm_architecture = ChatOpenRouter(model_name="openai/gpt-4o", temperature=0)
-llm_general = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0)
+llm_it = ChatOpenRouter(model_name="anthropic/claude-3.5-sonnet", temperature=0, streaming=True)
+llm_architecture = ChatOpenRouter(model_name="openai/gpt-4o", temperature=0, streaming=True)
+llm_general = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0, streaming=True)
 llm_summary = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0)
 llm_call_model = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0)
 
@@ -129,11 +129,11 @@ def summarize_conversation(state: AgentState):
     if summary:
         summary_message = (
             f"This is summary of the conversation to date: {summary}\n\n"
-            "Extend the summary by taking into account the new messages above:"
+            "Extend the summary by taking into account the new messages above, making sure it respects the messages order and content:"
         )
         
     else:
-        summary_message = "Create a summary of the conversation above:"
+        summary_message = "Create a summary of the conversation above, making sure it respects the messages order and content:"
 
     # Add prompt to messages history
     messages = state["messages"] + [HumanMessage(content=summary_message)]
@@ -146,11 +146,13 @@ def summarize_conversation(state: AgentState):
 def should_summarize(state: AgentState):
     
     """Return the next node to execute."""
-    
+    print (colored(f"DEBUG: Current message count: {len(state['messages'])}", "red"))
     messages = state["messages"]
     
-    # If there are more than six messages, then we summarize the conversation
-    if len(messages) > 6:
+    # Count only user queries
+    user_query_count = sum(1 for msg in messages if isinstance(msg, HumanMessage))
+    if user_query_count > 4:
+        print(colored("Summarizing conversation...", "yellow"))
         return "summarize_conversation"
     
     # Otherwise go to route agent
@@ -164,6 +166,7 @@ def route_query(state: AgentState):
     print(colored(f"\nRouting Agent: Processing query - '{state['messages'][-1]}'", "blue"))
     router_prompt = ChatPromptTemplate.from_template(
         "Route the following query to the appropriate department: {query}\n"
+        "If the query has multiple topics, use ONLY the last topic in the summary to decide the routing."
         "Departments: IT, Architecture, General\n"
         "IT: For coding-related questions, use of frameworks and coding best practices.\n"
         "Architecture: For solutions architecture decisions and tools.\n"
@@ -204,8 +207,8 @@ def handle_architecture_query(state: AgentState):
 def handle_general_query(state: AgentState):
     print(colored(f"\nGeneral Department: Handling query - '{state['messages'][-1]}'", "blue"))
     prompt = ChatPromptTemplate.from_template(
-        "You are a helpful customer service assistant for a software engineering company. "
-        "Answer the following general query: {query}"
+        "You are a helpful customer service assistant. "
+        "Answer the last topic of the query: {query}"
         #"If the query is not related to software engineering or to information about the conversation and user, say 'I'm sorry, I can't help with that.'"
     )
     chain = prompt | llm_general | StrOutputParser()
