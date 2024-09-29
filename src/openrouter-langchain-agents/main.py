@@ -62,8 +62,9 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver 
 from termcolor import colored
 import uuid
-from langchain_core.messages import HumanMessage
-from langgraph.graph import MessagesState # pre-built 'messages' key with add_messages reducer, equivalent to the above
+from langchain_core.messages import HumanMessage, SystemMessage , RemoveMessage
+# MessagesState has pre-built 'messages' key with add_messages reducer, equivalent to the above
+from langgraph.graph import MessagesState
 
 load_dotenv()
 
@@ -89,6 +90,8 @@ llm_router = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0)
 llm_it = ChatOpenRouter(model_name="anthropic/claude-3.5-sonnet", temperature=0)
 llm_architecture = ChatOpenRouter(model_name="openai/gpt-4o", temperature=0)
 llm_general = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0)
+llm_summary = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0)
+llm_call_model = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0)
 
 # Define the state pydantic model for agents system
 # class AgentState(TypedDict):
@@ -97,9 +100,64 @@ llm_general = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0)
 
 from langgraph.graph import MessagesState # pre-built 'messages' key with add_messages reducer, equivalent to the above
 class AgentState(MessagesState):
-    department: str = ""
+    department: str
+    summary: str
+
+##### Handling memory and summarization
+## Logic to summarize conversation and add it to the system message
+def call_model(state: AgentState):
+    
+    # Get summary if it exists
+    summary = state.get("summary", "")
+
+    # If there is summary, add it too syst message
+    if summary:
+        system_message = f"Summary of conversation earlier: {summary}"
+        messages = [SystemMessage(content=system_message)] + state["messages"]
+    
+    else:
+        messages = state["messages"]
+    
+    #response = llm_call_model.invoke(messages)
+    return {"messages": messages}
+
+def summarize_conversation(state: AgentState):   
+    # get existing summary, if any
+    summary = state.get("summary", "")
+
+    # create 'summarization prompt'
+    if summary:
+        summary_message = (
+            f"This is summary of the conversation to date: {summary}\n\n"
+            "Extend the summary by taking into account the new messages above:"
+        )
+        
+    else:
+        summary_message = "Create a summary of the conversation above:"
+
+    # Add prompt to messages history
+    messages = state["messages"] + [HumanMessage(content=summary_message)]
+    response = llm_summary.invoke(messages)
+    
+    # Delete all but the 5 most recent messages -> token optimization strategy
+    delete_messages = [RemoveMessage(id=m.id) for m in state["messages"][:-5]]
+    return {"summary": response.content, "messages": delete_messages}
+
+def should_summarize(state: AgentState):
+    
+    """Return the next node to execute."""
+    
+    messages = state["messages"]
+    
+    # If there are more than six messages, then we summarize the conversation
+    if len(messages) > 6:
+        return "summarize_conversation"
+    
+    # Otherwise go to route agent
+    return "route"
 
 
+##### Department agents
 ## Department Router Agent
 ### create agent and chain
 def route_query(state: AgentState):
@@ -113,7 +171,7 @@ def route_query(state: AgentState):
         "Output ONLY ONE of these department names."
     )
     chain = router_prompt | llm_router | StrOutputParser()
-    department = chain.invoke({"query": state['messages'][-1]})
+    department = chain.invoke({"query": state['messages']})
     print(colored(f"Routing Agent: Query routed to {department}", "green"))
     return {"department": department}
 
@@ -125,7 +183,7 @@ def handle_it_query(state: AgentState):
         "You are an expert in software development and coding. Answer the following query related to coding or technical issues: {query}"
     )
     chain = prompt | llm_it | StrOutputParser()
-    response = chain.invoke({"query": state['messages'][-1]})
+    response = chain.invoke({"query": state['messages']})
     print(colored("IT Department: Response generated", "green"))
     return {"messages": response}
 
@@ -137,7 +195,7 @@ def handle_architecture_query(state: AgentState):
         "You are a software architecture specialist. Answer the following query related to software architecture decisions or best practices: {query}"
     )
     chain = prompt | llm_architecture | StrOutputParser()
-    response = chain.invoke({"query": state['messages'][-1]})
+    response = chain.invoke({"query": state['messages']})
     print(colored("Architecture Department: Response generated", "green"))
     return {"messages": response}
 
@@ -151,24 +209,41 @@ def handle_general_query(state: AgentState):
         #"If the query is not related to software engineering or to information about the conversation and user, say 'I'm sorry, I can't help with that.'"
     )
     chain = prompt | llm_general | StrOutputParser()
-    response = chain.invoke({"query": state['messages'][-1]})
+    response = chain.invoke({"query": state['messages']})
     print(colored("General Department: Response generated", "green"))
     return {"messages": response}
 
 
-# Define the LangGraph workflow
+# Define the LangGraph workflow state
 workflow = StateGraph(AgentState)
 
 # Add nodes
+workflow.add_node("call_model", call_model)
+workflow.add_node("summarize_conversation", summarize_conversation)
 workflow.add_node("route", route_query)
 workflow.add_node("IT", handle_it_query)
 workflow.add_node("Architecture", handle_architecture_query)
 workflow.add_node("General", handle_general_query)
 
 # Set the entry point
-workflow.set_entry_point("route")
+workflow.set_entry_point("call_model")
 
-# Add conditional edges
+workflow.add_conditional_edges(
+    "call_model",
+    should_summarize,
+    {
+        "summarize_conversation": "summarize_conversation",
+        "route": "route"
+    }
+)
+workflow.add_edge("summarize_conversation", "route")
+
+# Add edges from department nodes to END
+workflow.add_edge("IT", END)
+workflow.add_edge("Architecture", END)
+workflow.add_edge("General", END)
+
+# conditional edges - departments
 workflow.add_conditional_edges(
     "route",
     lambda x: x['department'],  # Access department as an attribute of AgentState
@@ -179,11 +254,6 @@ workflow.add_conditional_edges(
     }
 )
 
-# Add edges from department nodes to END
-workflow.add_edge("IT", END)
-workflow.add_edge("Architecture", END)
-workflow.add_edge("General", END)
-
 
 # Set up memory management (in-memory)
 memory = MemorySaver()
@@ -191,8 +261,8 @@ memory = MemorySaver()
 graph = workflow.compile(checkpointer=memory)
 
 # Define the path for the  graph image file
-img_path = 'llm-routing/src/openrouter-langchain-agents/img'
-img_file = os.path.join(img_path, 'workflow_graph.png')
+img_path = 'src/openrouter-langchain-agents/img'
+img_file = os.path.join(img_path, 'department_workflow_graph.png')
 
 # Check if the image file already exists
 if not os.path.exists(img_file):
@@ -217,27 +287,23 @@ def main():
     print(f"Session ID: {session_id}")
 
     while True:
-        query = input("How can I assist you today? (Type 'exit' to end): ")
-        
+
+        query = input("Enter your query (Type 'exit' to end): ")
         if query.lower() == 'exit':
             break
-
-        # Use the session_id as the thread_id
+        
         config = {"configurable": {"thread_id": session_id}}
+        input_message = HumanMessage(content=query)
+        output = graph.invoke({"messages": [input_message]}, config=config)
         
-        result = graph.invoke(
-            {
-                "messages": [HumanMessage(content=query)],
-                "department": "",
-            },
-            config=config
-        )
+        # Print the last message in the output
+        if output['messages']:
+            last_message = output['messages'][-1]
+            print(colored(f"\nCustomer Support Assistant: {last_message}", "yellow"))
         
-        if isinstance(result, dict) and "response" in result:
-            print(f"\nCustomer Support Assistant: {result['response']}")
-        else:
-            print(f"\nDebug - Unexpected result: {result}")
-        print(f"Session ID: {session_id}")
+        # DEBUG !!!
+        # print(graph.get_state(config).values.get("summary",""))        
+        # print(f"Session ID: {session_id}")
         print()
 
     print("\nThank you for using Customer Support. Have a great day!")
