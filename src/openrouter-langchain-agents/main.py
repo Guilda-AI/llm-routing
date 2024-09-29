@@ -64,12 +64,9 @@ from langgraph.checkpoint.memory import MemorySaver
 from termcolor import colored
 import uuid
 from langchain_core.messages import HumanMessage
-
+from langgraph.graph import MessagesState # pre-built 'messages' key with add_messages reducer, equivalent to the above
 
 load_dotenv()
-
-# Set up memory management (in-memory)
-memory = MemorySaver()
 
 class ChatOpenRouter(ChatOpenAI):
     openai_api_base: str
@@ -98,7 +95,7 @@ llm_general = ChatOpenRouter(model_name="openai/gpt-4o-mini", temperature=0)
 #     department: str = ""
 #     messages: Annotated[list[AnyMessage], add_messages]
 
-from langgraph.graph import MessagesState # pre-built 'messages' key, equivalent to the above
+from langgraph.graph import MessagesState # pre-built 'messages' key with add_messages reducer, equivalent to the above
 class AgentState(MessagesState):
     department: str = ""
 
@@ -188,8 +185,22 @@ workflow.add_edge("Architecture", END)
 workflow.add_edge("General", END)
 
 
+# Set up memory management (in-memory)
+memory = MemorySaver()
 # Compile the graph with the checkpointer
 graph = workflow.compile(checkpointer=memory)
+
+# Create the 'img' directory if it doesn't exist
+os.makedirs('llm-routing/src/openrouter-langchain-agents/img', exist_ok=True)
+
+# Generate the Mermaid PNG and save it
+mermaid_png = graph.get_graph().draw_mermaid_png()
+
+# Save the PNG to a file
+with open('llm-routing/src/openrouter-langchain-agents/img/workflow_graph.png', 'wb') as f:
+    f.write(mermaid_png)
+
+print("Graph image saved as 'llm-routing/src/openrouter-langchain-agents/img/workflow_graph.png'")
 
 def main():
     print("Welcome to Customer Support!")
@@ -198,7 +209,8 @@ def main():
     print(f"Session ID: {session_id}")
 
     while True:
-        query = input("How can I assist you today? (Type 'exit' to end): "
+        query = input("How can I assist you today? (Type 'exit' to end): ")
+        
         if query.lower() == 'exit':
             break
 
